@@ -516,13 +516,16 @@ data/
 несколько placeholder-изображений, которые используются для отображения примера
 в README.
 
-![ClickHouse tables](https://raw.githubusercontent.com/erjan/nova_data_house_analysis_task/main/docs/screenshots/clickhouse/clickhouse_tables.png)
+<img src="https://raw.githubusercontent.com/erjan/nova_data_house_analysis_task/main/docs/screenshots/clickhouse/clickhouse_tables.png" alt="ClickHouse tables" width="600">
+
 > Список таблиц в базе `russian_houses_db` (ожидается таблица `houses`).
 
-![ClickHouse query](https://raw.githubusercontent.com/erjan/nova_data_house_analysis_task/main/docs/screenshots/clickhouse/clickhouse_query.png)
+<img src="https://raw.githubusercontent.com/erjan/nova_data_house_analysis_task/main/docs/screenshots/clickhouse/clickhouse_query.png" alt="ClickHouse query" width="600">
+
 > Пример выполнения запроса `SELECT COUNT(*) FROM houses` через веб-интерфейс.
 
-![ClickHouse results](https://raw.githubusercontent.com/erjan/nova_data_house_analysis_task/main/docs/screenshots/clickhouse/clickhouse_results.png)
+<img src="https://raw.githubusercontent.com/erjan/nova_data_house_analysis_task/main/docs/screenshots/clickhouse/clickhouse_results.png" alt="ClickHouse results" width="600">
+
 > Вывод результата, показывающий, что таблица не пустая.
 
 > При необходимости вы можете заменить эти файлы на реальные скриншоты, просто
