@@ -85,11 +85,11 @@ cd nova_data_house_analysis_task
 
 **Важно:** CSV файл `russian_houses.csv` НЕ хранится в репозитории из-за большого размера (~300 МБ).
 
-Скачайте файл из источника данных (см. `description.txt`) и поместите его в корневую директорию проекта:
+Скачайте файл из источника данных (см. `description.txt`) и поместите его в папку `data`:
 
 ```bash
 # Файл должен находиться здесь:
-# nova_data_house_analysis_task/russian_houses.csv
+# nova_data_house_analysis_task/data/russian_houses.csv
 ```
 
 **Примечание:** В репозитории включен файл `russian_houses_sample.csv` с образцом данных для ознакомления.

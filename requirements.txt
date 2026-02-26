@@ -3,5 +3,5 @@ clickhouse-connect==0.7.17
 pandas==2.1.4
 matplotlib==3.8.2
 psycopg2-binary==2.9.9
-sqlalchemy==2.0.25
+sqlalchemy==1.4.48
 numpy==1.26.3

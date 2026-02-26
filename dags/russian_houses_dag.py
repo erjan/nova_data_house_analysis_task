@@ -20,8 +20,9 @@ CH_USER = os.getenv('CH_USER', 'default')
 CH_PASSWORD = os.getenv('CH_PASSWORD', 'clickhouse123')
 CH_DATABASE = os.getenv('CH_DATABASE', 'russian_houses_db')
 
-# Путь к CSV файлу
+# Пути к файлам
 CSV_FILE_PATH = '/opt/airflow/data/russian_houses.csv'
+PARQUET_FILE_PATH = '/opt/airflow/data/russian_houses.parquet'
 
 # Глобальная переменная для SparkSession
 spark = None
@@ -41,14 +42,25 @@ def get_spark_session():
     return spark
 
 
+def read_parquet_data(spark):
+    """Чтение предварительно обработанных данных из Parquet"""
+    df = spark.read.parquet(PARQUET_FILE_PATH)
+    print(f"✅ Parquet прочитан. Колонки: {df.columns}")
+    return df
+
+
 def read_csv_with_bom_fix(spark):
-    """Чтение CSV с правильной кодировкой (UTF-16 LE)"""
+    """Чтение CSV с правильной кодировкой (UTF-16 LE) и полными параметрами"""
     # CSV файл имеет UTF-16 LE BOM (0xFF 0xFE), поэтому читаем с правильной кодировкой
     df = spark.read.csv(
         CSV_FILE_PATH,
         header=True,
-        inferSchema=True,
-        encoding='UTF-16LE'
+        encoding='UTF-16LE',
+        quote='"',
+        escape='"',
+        multiLine=True,
+        mode="PERMISSIVE",
+        columnNameOfCorruptRecord="_corrupt_record"
     )
     
     print(f"✅ CSV прочитан. Колонки: {df.columns}")
@@ -64,23 +76,82 @@ def stop_spark_session():
         spark = None
 
 
-def load_csv_to_spark(**context):
+def prepare_data_to_parquet(**context):
     """
-    Задача 1: Загрузка CSV файла в DataFrame PySpark
+    Задача 0: Подготовка данных - чтение CSV один раз, очистка и сохранение в Parquet
+    Это гарантирует, что все последующие задачи работают с одними и теми же очищенными данными
     """
     print("=" * 80)
-    print("ЗАДАЧА 1: Загрузка данных в PySpark DataFrame")
+    print("ЗАДАЧА 0: Подготовка данных - Чтение CSV и сохранение в Parquet")
     print("=" * 80)
     
     spark = get_spark_session()
+    
+    # Читаем CSV с правильной кодировкой
     df = read_csv_with_bom_fix(spark)
     
     # Подсчет количества строк
     row_count = df.count()
-    print(f"\n✅ Количество строк в датасете: {row_count}")
+    print(f"\n✅ Количество строк в исходном CSV: {row_count}")
     
-    # Сохраняем количество строк в XCom
-    context['ti'].xcom_push(key='row_count', value=row_count)
+    # Показываем схему данных
+    print("\nИсходная схема данных:")
+    df.printSchema()
+    
+    # Преобразование типов данных
+    print("\nПреобразование типов данных...")
+    df_transformed = df \
+        .withColumn("house_id", col("house_id").cast(IntegerType())) \
+        .withColumn("latitude", col("latitude").cast(DoubleType())) \
+        .withColumn("longitude", col("longitude").cast(DoubleType())) \
+        .withColumn("maintenance_year", col("maintenance_year").cast(IntegerType())) \
+        .withColumn("square", col("square").cast(DoubleType())) \
+        .withColumn("population", col("population").cast(IntegerType())) \
+        .withColumnRenamed("house_id", "id") \
+        .withColumnRenamed("maintenance_year", "year") \
+        .withColumnRenamed("square", "area") \
+        .withColumnRenamed("population", "floors") \
+        .withColumnRenamed("locality_name", "city")
+    
+    # Удаляем строки с null значениями в критичных полях
+    df_clean = df_transformed.filter(
+        col("id").isNotNull() & 
+        col("year").isNotNull() & 
+        col("area").isNotNull()
+    ).select("id", "latitude", "longitude", "year", "area", "floors", "region", "city", "address", "description")
+    
+    clean_count = df_clean.count()
+    print(f"✅ Количество строк после очистки: {clean_count}")
+    
+    print("\nПреобразованная схема данных:")
+    df_clean.printSchema()
+    
+    # Сохраняем очищенные данные в Parquet (перезаписываем, если уже существует)
+    print(f"\nСохранение очищенных данных в {PARQUET_FILE_PATH}...")
+    df_clean.coalesce(1).write.mode("overwrite").parquet(PARQUET_FILE_PATH)
+    print(f"✅ Данные успешно сохранены в Parquet")
+    
+    # Сохраняем статистику в XCom
+    context['ti'].xcom_push(key='total_rows', value=row_count)
+    context['ti'].xcom_push(key='clean_rows', value=clean_count)
+    
+    return clean_count
+
+
+def load_csv_to_spark(**context):
+    """
+    Задача 1: Информация о загруженных данных (данные уже подготовлены в задаче 0)
+    """
+    print("=" * 80)
+    print("ЗАДАЧА 1: Информация о загруженных данных")
+    print("=" * 80)
+    
+    spark = get_spark_session()
+    df = read_parquet_data(spark)
+    
+    # Подсчет количества строк
+    row_count = df.count()
+    print(f"\n✅ Количество строк в датасете: {row_count}")
     
     # Показываем схему данных
     print("\nСхема данных:")
@@ -90,19 +161,22 @@ def load_csv_to_spark(**context):
     print("\nПервые 5 строк данных:")
     df.show(5, truncate=False)
     
+    # Сохраняем количество строк в XCom
+    context['ti'].xcom_push(key='row_count', value=row_count)
+    
     return row_count
 
 
 def validate_data(**context):
     """
-    Задача 2: Проверка корректности данных
+    Задача 2: Проверка корректности данных (данные уже очищены в задаче 0)
     """
     print("=" * 80)
     print("ЗАДАЧА 2: Проверка корректности данных")
     print("=" * 80)
     
     spark = get_spark_session()
-    df = read_csv_with_bom_fix(spark)
+    df = read_parquet_data(spark)
     
     # Проверка на пустые строки
     total_rows = df.count()
@@ -112,7 +186,7 @@ def validate_data(**context):
     print("\nПроверка на NULL значения:")
     for column in df.columns:
         null_count = df.filter(col(column).isNull()).count()
-        null_percentage = (null_count / total_rows) * 100
+        null_percentage = (null_count / total_rows) * 100 if total_rows > 0 else 0
         print(f"  {column}: {null_count} NULL ({null_percentage:.2f}%)")
     
     # Проверка, что данные корректно прочитаны
@@ -125,52 +199,29 @@ def validate_data(**context):
 
 def transform_data(**context):
     """
-    Задача 3: Преобразование текстовых и числовых полей в соответствующие типы данных
+    Задача 3: Проверка преобразованных типов данных (преобразование уже выполнено в задаче 0)
     """
     print("=" * 80)
-    print("ЗАДАЧА 3: Преобразование типов данных")
+    print("ЗАДАЧА 3: Проверка преобразованных типов данных")
     print("=" * 80)
     
     spark = get_spark_session()
-    df = read_csv_with_bom_fix(spark)
+    df = read_parquet_data(spark)
     
-    print("\nИсходная схема данных:")
+    print("\nСхема данных:")
     df.printSchema()
     
-    # Преобразование типов данных
-    # Столбцы: house_id, latitude, longitude, maintenance_year, square, population, region, locality_name, address, full_address, communal_service_id, description
+    print("\nТипы данных для каждого столбца:")
+    for column_name, data_type in df.dtypes:
+        print(f"  {column_name}: {data_type}")
     
-    df_transformed = df \
-        .withColumn("house_id", col("house_id").cast(IntegerType())) \
-        .withColumn("latitude", col("latitude").cast(DoubleType())) \
-        .withColumn("longitude", col("longitude").cast(DoubleType())) \
-        .withColumn("maintenance_year", col("maintenance_year").cast(IntegerType())) \
-        .withColumn("square", col("square").cast(DoubleType())) \
-        .withColumn("population", col("population").cast(IntegerType()))
-    
-    # Переименовываем колонки для удобства
-    df_transformed = df_transformed \
-        .withColumnRenamed("house_id", "id") \
-        .withColumnRenamed("maintenance_year", "year") \
-        .withColumnRenamed("square", "area") \
-        .withColumnRenamed("population", "floors") \
-        .withColumnRenamed("locality_name", "city")
-    
-    print("\nПреобразованная схема данных:")
-    df_transformed.printSchema()
-    
-    # Удаляем строки с null значениями в критичных полях
-    df_clean = df_transformed.filter(
-        col("id").isNotNull() & 
-        col("year").isNotNull() & 
-        col("area").isNotNull()
-    ).select("id", "latitude", "longitude", "year", "area", "floors", "region", "city", "address", "description")
-    
-    clean_count = df_clean.count()
+    # Проверка количества строк после очистки
+    clean_count = df.count()
     print(f"\n✅ Количество строк после очистки: {clean_count}")
     
-    # Сохраняем очищенные данные во временную таблицу
-    df_clean.createOrReplaceTempView("houses")
+    # Показываем примеры данных
+    print("\nПримеры данных:")
+    df.show(10, truncate=False)
     
     context['ti'].xcom_push(key='clean_count', value=clean_count)
     
@@ -186,22 +237,13 @@ def calculate_year_statistics(**context):
     print("=" * 80)
     
     spark = get_spark_session()
-    df = read_csv_with_bom_fix(spark)
+    df = read_parquet_data(spark)
     
-    # Преобразуем и фильтруем данные
-    df_transformed = df \
-        .withColumn("house_id", col("house_id").cast(IntegerType())) \
-        .withColumn("maintenance_year", col("maintenance_year").cast(IntegerType())) \
-        .withColumn("square", col("square").cast(DoubleType())) \
-        .filter(col("maintenance_year").isNotNull()) \
-        .withColumnRenamed("house_id", "id") \
-        .withColumnRenamed("maintenance_year", "year") \
-        .withColumnRenamed("square", "area") \
-        .withColumnRenamed("population", "floors") \
-        .withColumnRenamed("locality_name", "city")
+    # Фильтруем данные с не-null значениями года
+    df_filtered = df.filter(col("year").isNotNull())
     
     # Проверка: сколько строк осталось после фильтрации
-    filtered_count = df_transformed.count()
+    filtered_count = df_filtered.count()
     print(f"\n📊 Строк после фильтрации NULL: {filtered_count}")
     
     if filtered_count == 0:
@@ -209,7 +251,7 @@ def calculate_year_statistics(**context):
         return None
     
     # Вычисление среднего года
-    avg_year_result = df_transformed.select(avg("year")).collect()
+    avg_year_result = df_filtered.select(avg("year")).collect()
     print(f"Debug: avg_year_result = {avg_year_result}")
     avg_year = avg_year_result[0][0] if avg_year_result and avg_year_result[0][0] is not None else None
     
@@ -220,7 +262,7 @@ def calculate_year_statistics(**context):
     print(f"\n📊 Средний год постройки: {avg_year:.2f}")
     
     # Вычисление медианного года
-    median_year = df_transformed.stat.approxQuantile("year", [0.5], 0.01)[0]
+    median_year = df_filtered.stat.approxQuantile("year", [0.5], 0.01)[0]
     print(f"📊 Медианный год постройки: {median_year}")
     
     context['ti'].xcom_push(key='avg_year', value=avg_year)
@@ -238,15 +280,11 @@ def top_regions_and_cities(**context):
     print("=" * 80)
     
     spark = get_spark_session()
-    df = read_csv_with_bom_fix(spark)
-    
-    df_transformed = df \
-        .withColumnRenamed("house_id", "id") \
-        .withColumnRenamed("locality_name", "city")
+    df = read_parquet_data(spark)
     
     # Топ-10 регионов
     print("\n📊 Топ-10 регионов по количеству объектов:")
-    top_regions = df_transformed.groupBy("region") \
+    top_regions = df.groupBy("region") \
         .agg(count("*").alias("count")) \
         .orderBy(col("count").desc()) \
         .limit(10)
@@ -255,7 +293,7 @@ def top_regions_and_cities(**context):
     
     # Топ-10 городов
     print("\n📊 Топ-10 городов по количеству объектов:")
-    top_cities = df_transformed.groupBy("city") \
+    top_cities = df.groupBy("city") \
         .agg(count("*").alias("count")) \
         .orderBy(col("count").desc()) \
         .limit(10)
@@ -309,16 +347,12 @@ def buildings_area_by_region(**context):
     print("=" * 80)
     
     spark = get_spark_session()
-    df = read_csv_with_bom_fix(spark)
+    df = read_parquet_data(spark)
     
-    df_transformed = df \
-        .withColumn("square", col("square").cast(DoubleType())) \
-        .withColumnRenamed("house_id", "id") \
-        .withColumnRenamed("square", "area") \
-        .filter(col("square").isNotNull())
+    df_filtered = df.filter(col("area").isNotNull())
     
     # Агрегация по регионам
-    area_stats = df_transformed.groupBy("region") \
+    area_stats = df_filtered.groupBy("region") \
         .agg(
             spark_max("area").alias("max_area"),
             spark_min("area").alias("min_area"),
@@ -370,15 +404,12 @@ def buildings_by_decade(**context):
     print("=" * 80)
     
     spark = get_spark_session()
-    df = read_csv_with_bom_fix(spark)
+    df = read_parquet_data(spark)
     
-    df_transformed = df \
-        .withColumn("maintenance_year", col("maintenance_year").cast(IntegerType())) \
-        .withColumnRenamed("maintenance_year", "year") \
-        .filter(col("maintenance_year").isNotNull())
+    df_filtered = df.filter(col("year").isNotNull())
     
     # Группировка по десятилетиям
-    df_decades = df_transformed \
+    df_decades = df_filtered \
         .withColumn("decade", (floor(col("year") / 10) * 10).cast(IntegerType())) \
         .groupBy("decade") \
         .agg(count("*").alias("count")) \
@@ -472,7 +503,7 @@ def create_clickhouse_table(**context):
 
 def load_data_to_clickhouse(**context):
     """
-    Задача 10: Загрузка обработанных данных из DataFrame в таблицу в ClickHouse
+    Задача 10: Загрузка обработанных данных из Parquet в таблицу в ClickHouse
     """
     print("=" * 80)
     print("ЗАДАЧА 10: Загрузка данных в ClickHouse")
@@ -480,25 +511,10 @@ def load_data_to_clickhouse(**context):
     
     spark = get_spark_session()
     
-    # Читаем и преобразуем данные
-    df = read_csv_with_bom_fix(spark)
+    # Читаем предварительно обработанные данные
+    df = read_parquet_data(spark)
     
-    df_transformed = df \
-        .withColumn("house_id", col("house_id").cast(IntegerType())) \
-        .withColumn("latitude", col("latitude").cast(DoubleType())) \
-        .withColumn("longitude", col("longitude").cast(DoubleType())) \
-        .withColumn("maintenance_year", col("maintenance_year").cast(IntegerType())) \
-        .withColumn("square", col("square").cast(DoubleType())) \
-        .withColumn("population", col("population").cast(IntegerType())) \
-        .withColumnRenamed("house_id", "id") \
-        .withColumnRenamed("maintenance_year", "year") \
-        .withColumnRenamed("square", "area") \
-        .withColumnRenamed("population", "floors") \
-        .withColumnRenamed("locality_name", "city") \
-        .filter(col("id").isNotNull()) \
-        .select("id", "latitude", "longitude", "year", "area", "floors", "region", "city", "address", "description")
-    
-    print(f"\nКоличество строк для загрузки: {df_transformed.count()}")
+    print(f"\nКоличество строк для загрузки: {df.count()}")
     
     try:
         # Подключение к ClickHouse
@@ -512,7 +528,7 @@ def load_data_to_clickhouse(**context):
         
         # Конвертируем Spark DataFrame в Pandas для загрузки
         print("\nКонвертация DataFrame в Pandas...")
-        pandas_df = df_transformed.toPandas()
+        pandas_df = df.toPandas()
         
         print(f"Размер данных: {len(pandas_df)} строк")
         
@@ -624,6 +640,12 @@ dag = DAG(
 )
 
 # Определение задач
+task_0_prepare = PythonOperator(
+    task_id='prepare_data_to_parquet',
+    python_callable=prepare_data_to_parquet,
+    dag=dag,
+)
+
 task_1_load = PythonOperator(
     task_id='load_csv_to_spark',
     python_callable=load_csv_to_spark,
@@ -691,7 +713,7 @@ task_cleanup = PythonOperator(
 )
 
 # Определение зависимостей между задачами
-task_1_load >> task_2_validate >> task_3_transform
+task_0_prepare >> task_1_load >> task_2_validate >> task_3_transform
 # Задачи 4-7 выполняются последовательно, чтобы избежать нехватки памяти
 task_3_transform >> task_4_year_stats >> task_5_top_regions >> task_6_area_stats >> task_7_decades
 task_7_decades >> task_8_create_table
